@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# 输出与临时文件
+OA/
+FINAL/
+work/
+output/
+*.zip
+
+# 用户数据 —— 绝对不要提交
+*.pdf
+*.docx
+!templates/验收单母版.docx
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
