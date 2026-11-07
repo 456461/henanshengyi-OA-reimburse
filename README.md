@@ -124,6 +124,43 @@ T.verify("OA.zip")
 | `check_amounts(items, total)` | 金额校验 |
 | `verify(zip)` | 页面尺寸自检 |
 
+
+## 批量打印
+
+打开 OA 文件夹，**双击 `打印耗材验收单.bat`**，就会把每个子文件夹里的验收单全部送进打印队列，不用一个个点。
+
+- **路径无关**：换电脑、换盘符、换目录名都能用，脚本以自己所在位置为根
+- **自动跳过锁文件**：Word 的 `~$xxx.docx` 临时文件不会被打印
+- **打印前确认**：列出所有文档 + 显示默认打印机，按 Y 才打
+
+命令行细化控制：
+
+```powershell
+# 只列清单，不打印（先核对）
+.\打印耗材验收单.bat        # 双击后手动加参数不方便，推荐直接跑 ps1
+powershell -ExecutionPolicy Bypass -File .\打印耗材验收单.ps1 -DryRun
+
+# 跳过确认直接打
+powershell -ExecutionPolicy Bypass -File .\打印耗材验收单.ps1 -Force
+```
+
+**兼容性**：自动适配 Microsoft Word 和 WPS，不需要手动选。
+
+探测顺序（逐级降级）：
+
+1. `Word.Application` —— 新版 WPS 也注册了这个 ProgID，先试它
+2. `KWPS.Application` / `WPS.Application` —— WPS 原生接口
+3. **Shell 兜底** —— 交给系统 `.docx` 文件关联，装的是什么就用什么
+
+三种都不可用时会明确报错，不会静默失败。
+
+强制指定引擎（一般用不上）：
+
+```powershell
+# 只在特殊排查时用
+powershell -ExecutionPolicy Bypass -File .\打印耗材验收单.ps1 -Engine WPS
+```
+
 ## 技术细节
 
 ### 抗折痕的内容包围盒

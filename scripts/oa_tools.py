@@ -173,6 +173,71 @@ def verify(zip_path):
     return ok
 
 
+# ---------- 9. 手写签字照片：透视校正 + 按尾号命名 ----------
+def warp_signature_photo(img_bgr):
+    """把木桌上斜拍的验收单照片校正成正面横版。
+    返回 (校正后的 numpy 数组, W, H)；失败返回 (None, 0, 0)。
+    关键：四点排序后必须确保长边水平，否则出来是竖版歪图。
+    """
+    import cv2
+    import numpy as np
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    L = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)[:, :, 0]
+    s = hsv[:, :, 1]
+    m = ((L > 140) & (s < 65)).astype(np.uint8) * 255
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((61, 61), np.uint8))
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((61, 61), np.uint8))
+    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None, 0, 0
+    c = max(cnts, key=cv2.contourArea)
+    if cv2.contourArea(c) < img_bgr.shape[0] * img_bgr.shape[1] * 0.3:
+        return None, 0, 0
+
+    rect = cv2.minAreaRect(c)
+    pts = cv2.boxPoints(rect)
+    ys = pts[:, 1]
+    mid = (ys.min() + ys.max()) / 2
+    top, bot = pts[ys <= mid], pts[ys > mid]
+    if len(top) != 2 or len(bot) != 2:
+        return None, 0, 0
+    tl = top[np.argmin(top[:, 0])]
+    tr = top[np.argmax(top[:, 0])]
+    bl = bot[np.argmin(bot[:, 0])]
+    br = bot[np.argmax(bot[:, 0])]
+    quad = np.array([tl, tr, br, bl], dtype=np.float32)
+
+    # 长边必须水平
+    wtop = float(np.linalg.norm(quad[1] - quad[0]))
+    hleft = float(np.linalg.norm(quad[3] - quad[0]))
+    if wtop < hleft:
+        quad = np.array([quad[1], quad[2], quad[3], quad[0]], dtype=np.float32)
+
+    W = int(max(np.linalg.norm(quad[1] - quad[0]), np.linalg.norm(quad[2] - quad[3])))
+    H = int(max(np.linalg.norm(quad[3] - quad[0]), np.linalg.norm(quad[2] - quad[1])))
+    if W <= 0 or H <= 0:
+        return None, 0, 0
+    dst = np.array([[0, 0], [W - 1, 0], [W - 1, H - 1], [0, H - 1]], dtype=np.float32)
+    M = cv2.getPerspectiveTransform(quad, dst)
+    return cv2.warpPerspective(img_bgr, M, (W, H)), W, H
+
+
+def place_signature(src_jpg, code, pkg_dir):
+    """校正一张签字照片并保存为 <pkg>/<code>/<code>.2.jpg"""
+    import cv2
+    img = cv2.imread(src_jpg)
+    if img is None:
+        raise ValueError("cannot read " + src_jpg)
+    warp, W, H = warp_signature_photo(img)
+    if warp is None:
+        raise ValueError("paper not found in " + src_jpg)
+    d = os.path.join(pkg_dir, code)
+    os.makedirs(d, exist_ok=True)
+    dst = os.path.join(d, "%s.2.jpg" % code)
+    cv2.imwrite(dst, warp, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+    return dst, W, H
+
+
 if __name__ == "__main__":
     print("oa_tools ready")
     print("INVOICE_PT", INVOICE_PT)
