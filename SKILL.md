@@ -372,6 +372,66 @@ if not "%RC%"=="0" (
 
 `chcp 65001` 可以试着切 UTF-8，但**不要依赖它**——老系统上不生效。
 
+#### 打印顺序：必须倒序
+
+打印机出纸是**先进后出**（纸张叠放，后打的在上面）。所以必须**按文件夹名倒序**打印，
+这样最上面才是第一份（尾号最小的）。
+
+```powershell
+# 倒序：7021 -> 4911 -> 3821 -> 3271 -> 2931 -> 1266
+# 出纸后最上面是 1266，符合翻阅顺序
+$docs = Get-ChildItem -LiteralPath $Root -Recurse -File -Filter '*.docx' |
+        Where-Object { $_.Name -notlike '~$*' } |
+        Sort-Object @{ Expression = { $_.Directory.Name }; Descending = $true },
+                    @{ Expression = { $_.Name }; Descending = $true }
+```
+
+**不要**用正序，否则拿到手是反的，还得自己重新排。
+
+#### 打印机「设置有问题」的多策略降级
+
+真实故障（住院骨肿瘤病区那台）：
+
+```
+默认打印机 : \\胃肠外科一D07\HP LaserJet 1020
+[ERROR] -> 失败: 由于打印机的当前设置有问题，Windows 无法打印。
+  出错位置 : $doc.PrintOut()
+  每份耗时 57 秒才报错
+```
+
+**这类网络共享的 GDI 打印机（HP LaserJet 1020 是典型）很容易出这问题。**
+单靠 `$doc.PrintOut()` 一种方法不够，必须多策略降级：
+
+| 顺序 | 策略 | 说明 |
+|---|---|---|
+| 1 | **ActivePrinter + 同步打印** | 先设 `$App.ActivePrinter`，再 `PrintOut([ref]$false,[ref]$false)` |
+| 2 | PrintOut 默认（后台） | 最常见写法 |
+| 3 | **转 PDF 后打印** | 绕过 Word 打印通道，对驱动不兼容最有效 |
+
+```powershell
+# 策略 1 —— 对网络打印机最有效
+$App.ActivePrinter = $PrinterName
+$doc = $App.Documents.Open($DocPath, $false, $true)
+$doc.PrintOut([ref]$false, [ref]$false)   # 第二个参数 Background=false，同步等待
+```
+
+**同步打印的好处**：能立刻知道成功还是失败，不会把任务堆在队列里拖 57 秒。
+实测从 57 秒降到 8.7 秒。
+
+#### 必须记录打印耗时
+
+用 `Stopwatch` 包住每次打印，日志里记下耗时：
+
+```powershell
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$res = Invoke-PrintOne -App $app -DocPath $d.FullName -PrinterName $printerName
+$sw.Stop()
+# 日志: -> 已送打印 [ActivePrinter+同步] 用时 8752ms
+```
+
+**为什么重要**：耗时 57 秒说明超时，耗时 400ms 说明立即拒绝。
+从耗时能判断是「打印机无响应」还是「参数不对」。
+
 #### 必须自动适配 Word / WPS
 
 **每台电脑装的 Office 不一样**：有的装 Microsoft Word，有的装 WPS。脚本不能只认一种。
@@ -434,6 +494,8 @@ Start-Process -FilePath $docxPath -Verb Print
 - [ ] 打印脚本 `-DryRun` 能正确列出全部 docx（且不含 `~$` 锁文件）
 - [ ] 打印脚本 `-Diagnose` 能输出环境日志
 - [ ] 跑一次确认生成了 `打印日志_*.txt`，内容含环境/引擎/文件清单
+- [ ] 打印顺序为**倒序**（7021 → ... → 1266）
+- [ ] 日志里记录了每份的打印耗时和所用策略
 - [ ] 项目名称逐份核对（该改的改了，该留的留着）
 - [ ] 明细金额求和 == 票面价税合计
 - [ ] Word 渲染一遍验收单，确认没错位

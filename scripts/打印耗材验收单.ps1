@@ -107,7 +107,8 @@ try { $Root = (Resolve-Path -LiteralPath $Root).Path } catch { }
 
 # ================= 2. 建立日志文件 =================
 
-$stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$script:stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$stamp = $script:stamp
 $logName = '打印日志_' + $stamp + '.txt'
 
 $candidates = @()
@@ -171,6 +172,21 @@ try {
     } catch { }
 }
 Write-Log ('默认打印机 : ' + $printerName)
+try {
+    $pd = Get-CimInstance -ClassName Win32_Printer -Filter 'Default=TRUE' -ErrorAction SilentlyContinue
+    if ($pd) {
+        Write-Log ('  驱动     : ' + $pd.DriverName)
+        Write-Log ('  端口     : ' + $pd.PortName)
+        Write-Log ('  共享     : ' + $pd.Shared + ' / 本地: ' + $pd.Local)
+        Write-Log ('  脱机     : ' + $pd.WorkOffline)
+        if (-not $pd.Local) { Write-Log '  注意：这是网络共享打印机，驱动不匹配会导致「设置有问题」' 'WARN' }
+    }
+} catch { }
+try {
+    $sp = Get-Service -Name Spooler -ErrorAction Stop
+    Write-Log ('打印服务   : ' + $sp.Status)
+    if ($sp.Status -ne 'Running') { Write-Log '  打印后台服务未运行！' 'ERROR' }
+} catch { }
 Write-Log ''
 
 # ================= 4. 扫描 docx =================
@@ -179,9 +195,11 @@ Write-Log '===== 扫描文档 =====' 'STEP'
 
 $docs = @()
 try {
+    # 倒序：打印机出纸是先进后出，倒着打最后出来的才是第一份
     $docs = Get-ChildItem -LiteralPath $Root -Recurse -File -Filter '*.docx' -ErrorAction Stop |
             Where-Object { $_.Name -notlike '~$*' } |
-            Sort-Object @{ Expression = { $_.Directory.Name } }, @{ Expression = { $_.Name } }
+            Sort-Object @{ Expression = { $_.Directory.Name }; Descending = $true },
+                        @{ Expression = { $_.Name }; Descending = $true }
 } catch {
     Write-Log ('扫描目录失败: ' + $_.Exception.Message) 'ERROR'
     Write-Log (Format-Error $_) 'ERROR'
@@ -200,7 +218,7 @@ if ($docs.Count -eq 0) {
     exit 1
 }
 
-Write-Log ('共找到 ' + $docs.Count + ' 份文档') 'OK'
+Write-Log ('共找到 ' + $docs.Count + ' 份文档（倒序打印）') 'OK'
 $n = 0
 foreach ($d in $docs) {
     $n++
@@ -323,7 +341,71 @@ if (-not $Force) {
     }
 }
 
-# ================= 9. 打印 =================
+# ================= 9. 打印（多策略降级） =================
+
+# 关键：网络共享的 GDI 打印机（如 HP LaserJet 1020）常见报错
+#   「由于打印机的当前设置有问题，Windows 无法打印」
+# 原因通常是 ActivePrinter 未正确设置、驱动不匹配、或后台队列卡死。
+# 这里按三种策略依次尝试，任一成功即继续下一份。
+
+function Invoke-PrintOne {
+    param($App, $DocPath, $PrinterName)
+    
+    $doc = $null
+    $lastErr = $null
+
+    # ---- 策略 1：先显式设置 ActivePrinter，再同步打印 ----
+    # 同步（Background = false）能避免任务堆在队列里报错，也能拿到真实结果
+    if ($PrinterName) {
+        try {
+            try {
+                $App.ActivePrinter = $PrinterName
+            } catch {
+                Write-Log ('        设置 ActivePrinter 失败: ' + $_.Exception.Message) 'WARN'
+            }
+            $doc = $App.Documents.Open($DocPath, $false, $true)
+            $doc.PrintOut([ref]$false, [ref]$false)
+            Start-Sleep -Milliseconds 600
+            try { $doc.Close(0) } catch { }
+            return @{ Ok = $true; Strategy = 'ActivePrinter+同步'; Error = $null }
+        } catch {
+            $lastErr = $_
+            if ($doc) { try { $doc.Close(0) } catch { }; $doc = $null }
+        }
+    }
+
+    # ---- 策略 2：普通 PrintOut（默认后台） ----
+    try {
+        $doc = $App.Documents.Open($DocPath, $false, $true)
+        $doc.PrintOut()
+        Start-Sleep -Milliseconds 600
+        try { $doc.Close(0) } catch { }
+        return @{ Ok = $true; Strategy = 'PrintOut 默认'; Error = $null }
+    } catch {
+        $lastErr = $_
+        if ($doc) { try { $doc.Close(0) } catch { }; $doc = $null }
+    }
+
+    # ---- 策略 3：导出 PDF 后交给系统打印 ----
+    # 绕过 Word 的打印通道，对驱动兼容性问题最有效
+    try {
+        $tmpPdf = Join-Path $env:TEMP ('_oa_' + $script:stamp + '_' + [System.IO.Path]::GetFileNameWithoutExtension($DocPath) + '.pdf')
+        $doc = $App.Documents.Open($DocPath, $false, $true)
+        $doc.ExportAsFixedFormat($tmpPdf, 17)
+        try { $doc.Close(0) } catch { }
+        $doc = $null
+        Start-Process -FilePath $tmpPdf -Verb Print -ErrorAction Stop
+        Start-Sleep -Milliseconds 1500
+        return @{ Ok = $true; Strategy = '转PDF后打印'; Error = $null }
+    } catch {
+        $lastErr = $_
+        if ($doc) { try { $doc.Close(0) } catch { } }
+    }
+
+    return @{ Ok = $false; Strategy = '全部失败'; Error = $lastErr }
+}
+
+# ================= 10. 打印 =================
 
 Write-Log '===== 开始打印 =====' 'STEP'
 
@@ -340,7 +422,7 @@ if ($chosen -eq 'Shell') {
         try {
             Start-Process -FilePath $d.FullName -Verb Print -ErrorAction Stop
             Start-Sleep -Milliseconds 1200
-            Write-Log '      -> 已送打印' 'OK'
+            Write-Log '      -> 已送打印 (Shell)' 'OK'
             $ok++
         } catch {
             Write-Log ('      -> 失败: ' + $_.Exception.Message) 'ERROR'
@@ -363,19 +445,23 @@ else {
             $n++
             $rel = $d.FullName.Substring($Root.Length).TrimStart([char]92)
             Write-Log ('[' + $n + '/' + $docs.Count + '] ' + $rel)
-            $doc = $null
-            try {
-                $doc = $app.Documents.Open($d.FullName, $false, $true)
-                $doc.PrintOut()
-                Start-Sleep -Milliseconds 400
-                try { $doc.Close(0) } catch { Write-Log ('      Close 失败: ' + $_.Exception.Message) 'WARN' }
-                Write-Log '      -> 已送打印' 'OK'
+
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $res = Invoke-PrintOne -App $app -DocPath $d.FullName -PrinterName $printerName
+            $sw.Stop()
+
+            if ($res.Ok) {
+                Write-Log ('      -> 已送打印 [' + $res.Strategy + '] 用时 ' + $sw.ElapsedMilliseconds + 'ms') 'OK'
                 $ok++
-            } catch {
-                Write-Log ('      -> 失败: ' + $_.Exception.Message) 'ERROR'
-                Write-Log (Format-Error $_) 'ERROR'
-                if ($doc) { try { $doc.Close(0) } catch { } }
-                $failList += ($rel + ' :: ' + $_.Exception.Message)
+            } else {
+                Write-Log ('      -> 失败（用时 ' + [math]::Round($sw.Elapsed.TotalSeconds,1) + ' 秒）') 'ERROR'
+                if ($res.Error) {
+                    Write-Log ('      ' + $res.Error.Exception.Message) 'ERROR'
+                    Write-Log (Format-Error $res.Error) 'ERROR'
+                }
+                $reason = '未知错误'
+                if ($res.Error) { $reason = $res.Error.Exception.Message }
+                $failList += ($rel + ' :: ' + $reason)
                 $fail++
             }
         }
@@ -405,6 +491,15 @@ if ($fail -gt 0) {
 if ($failList.Count -gt 0) {
     Write-Log '失败清单：' 'ERROR'
     foreach ($fitem in $failList) { Write-Log ('  - ' + $fitem) 'ERROR' }
+    Write-Log ''
+    Write-Log '===== 排查建议 =====' 'STEP'
+    Write-Log '若报「打印机的当前设置有问题，Windows 无法打印」：' 'WARN'
+    Write-Log '  1. 手动打开任意一份 docx，按 Ctrl+P 试打，看是否同样报错' 'WARN'
+    Write-Log '  2. 检查打印机是否脱机（设置 > 蓝牙和设备 > 打印机和扫描仪）' 'WARN'
+    Write-Log '  3. 网络共享打印机：确认共享主机开机且打印服务运行' 'WARN'
+    Write-Log '  4. HP LaserJet 1020 属 GDI 打印机，共享端与本机驱动须同版本' 'WARN'
+    Write-Log '  5. 清空打印队列后重试（卡住的任务会阻塞后续打印）' 'WARN'
+    Write-Log '  6. 终极方案：在共享主机上共享时勾选「其他驱动程序」安装 x64 驱动' 'WARN'
 }
 
 Save-Log
