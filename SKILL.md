@@ -7,6 +7,100 @@ description: 河南省人民医院 OA 报销单据打包。把扫描件发票/�
 
 把一堆扫描件票据整理成交付给财务的 `OA.zip`。每组按发票尾号一个文件夹，内含发票、出库单、验收单三件套。
 
+## ⚡ 执行纪律：先问齐，再动手，一次跑完
+
+**这个 skill 最大的耗时不在计算，在来回确认。**
+
+实测：整条流水线跑完只要 **3.7 秒**（提取 0.6s + 出 PDF 1.4s + 签字照 0.4s + 验收单 0.02s + 打包 1.2s）。
+但人工一张张看图、反复渲染验证，能耗掉几十分钟。
+
+### 硬规则 1：开工前一次性问齐
+
+**收到材料后，先问清楚下面全部内容，问完再动手。不许边做边问。**
+
+| # | 必问项 | 说明 |
+|---|---|---|
+| 1 | **扫描件 PDF 路径** | 发票+出库单的扫描件（不是照片） |
+| 2 | **签字照目录** | 打印签字后拍的照片 |
+| 3 | **项目名称** | 不恒定，每批可能不同 |
+| 4 | **项目编码** | 不恒定 |
+| 5 | **经办人** | 不恒定 |
+| 6 | **是否有多个项目混批** | 有的话要逐份指定名称+编码 |
+
+**验收时间不用问** —— 默认取当天。
+
+问完立刻整理成 CONFIG，一次跑完，中间不打断用户。
+
+### 硬规则 2：看图用拼图，不要一张张看
+
+**这是提速的关键。** 6 张签字照逐张读 = 6 次往返，每次几十秒。
+拼成一张 = 1 次往返，看清全部。
+
+```python
+def make_contact_sheet(images, dst, cols=3, cell_w=620):
+    ims = [Image.open(p) if isinstance(p, str) else p for p in images]
+    rows = (len(ims) + cols - 1) // cols
+    ch = int(cell_w * ims[0].height / max(1, ims[0].width))
+    sheet = Image.new('RGB', (cols*cell_w, rows*ch), 'white')
+    for i, im in enumerate(ims):
+        sheet.paste(im.resize((cell_w, ch), Image.LANCZOS), ((i%cols)*cell_w, (i//cols)*ch))
+    sheet.save(dst, quality=82)
+```
+
+6 张拼成 1860x754 的图，174 KB，**一次看清全部发票号和签名**。
+
+同理：**验收单 docx 也不要点开逐个检查**，用程序校验（读 `word/document.xml` 比对字段），
+只有全部通过后才考虑抽样渲染 1-2 张肉眼确认。
+
+### 硬规则 3：用一键流水线，不要分步执行
+
+`scripts/build_all.py` 已把全部步骤串好，改完 CONFIG 直接跑：
+
+```bash
+cd scripts
+python build_all.py
+```
+
+输出：
+
+```
+[1/6] 提取扫描件...        8 页, 0.6 s
+[2/6] 生成发票/出库单...    8 个 PDF, 1.4 s
+[2.5] 补齐外部原件...       （扫描件里没有的组）
+[3/6] 处理签字照...        6 张 + 拼图, 0.4 s
+[4/6] 生成验收单...        6 份, 0.02 s
+[5/6] 放入打印脚本...      0.0 s
+[6/6] 打包...              26 文件, 11 MB, 1.2 s
+
+完成！总耗时 3.69 秒
+```
+
+### 硬规则 4：OpenCV 读不了中文路径
+
+`cv2.imread()` 在 Windows 上遇到中文路径直接返回 None，**且不报错**，只会静默失败。
+
+```python
+# 错：静默返回 None
+img = cv2.imread(r'c:\Users\xxx\Desktop\第1组\0001.png')   # None!
+
+# 对：先复制到纯英文路径
+import shutil
+shutil.copyfile(src_cn_path, r'D:\work\p1.png')
+img = cv2.imread(r'D:\work\p1.png')
+```
+
+### 时间预算
+
+| 环节 | 应耗时 |
+|---|---|
+| 问齐信息 | 1 次往返 |
+| 看图核对 | 1-2 次往返（拼图） |
+| 跑流水线 | 4 秒 |
+| 程序校验 | 1 次 |
+| **合计** | **3-5 次往返** |
+
+如果发现自己要读第 3 张以上的单张图，**停下来，改用拼图**。
+
 ## 何时用这个 Skill
 
 用户提到以下任一情况：
@@ -506,17 +600,24 @@ Start-Process -FilePath $docxPath -Verb Print
 
 ## 配套脚本
 
-`scripts/oa_tools.py` 提供全部函数：
+| 文件 | 作用 |
+|---|---|
+| `scripts/build_all.py` | **一键构建（主入口）**，改 CONFIG 后直接跑，3.7 秒出包 |
+| `scripts/oa_pipeline.py` | 流水线核心：PDF/签字照/docx/打包，全部函数内联 |
+| `scripts/oa_tools.py` | 通用工具函数（供单独调用） |
+| `scripts/打印耗材验收单.ps1` | 批量打印（Word/WPS 自适应 + 日志 + 倒序） |
+| `scripts/打印耗材验收单.bat` | 双击启动器 |
+| `templates/验收单母版.docx` | 验收单母版（已净化，无真实数据） |
+
+### 常用函数
 
 | 函数 | 作用 |
 |---|---|
-| `extract_pages(pdf, dir)` | 无损提取每页位图 |
-| `content_box(img)` | 检测票据内容包围盒（抗折痕） |
-| `make_pdf(img, kind, dst)` | 摆成发票/出库单规格 |
-| `patch_docx_text(src, dst, {old:new})` | 改 docx 文本保样式 |
-| `make_zip(src_dir, zip)` | 打包（UTF-8 名） |
-| `verify(zip)` | 自检 |
-| `check_amounts(items, total)` | 金额校验 |
+| `P.make_pdf(img, kind, dst)` | 摆成发票/出库单规格 |
+| `P.warp_signature(img_bgr)` | 签字照透视校正 |
+| `P.make_contact_sheet(images, dst)` | **拼图预览（提速关键）** |
+| `P.build_docx(...)` | 重建验收单表格 |
+| `P.make_zip(src, zip)` | 打包（UTF-8 名） |
 
 ## 常见问题
 
