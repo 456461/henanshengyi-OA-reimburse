@@ -251,6 +251,127 @@ Where-Object { $_.Name -notlike '~$*' }
 - `-Engine Auto|Word|WPS|Shell`：强制指定打印引擎（默认 Auto 自动探测）
 - 默认：列出清单 + 显示默认打印机 + 询问 Y/n
 
+#### 必须带日志（报错排查的唯一线索）
+
+**这是硬要求。** 用户的电脑环境千差万别——PowerShell 版本、Office 位数、执行策略、默认打印机、权限……都会导致脚本报错。没有日志就等于闭眼修 bug。
+
+**日志必须在最开头建立**，不能等出错才想起写日志（那时可能已经崩了）。
+
+```powershell
+# 优先级：用户指定 > 脚本所在目录 > TEMP
+$candidates = @()
+if ($LogDir) { $candidates += $LogDir }
+$candidates += $Root
+$candidates += $env:TEMP
+
+foreach ($dir in $candidates) {
+    try {
+        # 探测可写性（写个临时文件试试）
+        $probe = Join-Path $dir ('.wt_' + $stamp + '.tmp')
+        Set-Content -LiteralPath $probe -Value 'x' -Encoding ASCII -ErrorAction Stop
+        Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+        $script:LogPath = Join-Path $dir $logName
+        break
+    } catch { continue }
+}
+```
+
+**为什么要三级兜底**：根目录可能只读（U 盘写保护、网络盘权限），TEMP 几乎总可写。
+
+#### 日志必须记录的内容
+
+| 类别 | 具体项 |
+|---|---|
+| **环境快照** | PowerShell 版本、CLR、进程位数、OS 版本、用户名、计算机名、执行策略 |
+| **路径** | 脚本路径、根目录、当前目录 |
+| **打印机** | 默认打印机名称（读不到也要记 WARN） |
+| **扫描结果** | 找到几个 docx、每个的相对路径和大小 |
+| **引擎探测** | 每个 ProgID 试了没、可用与否、失败原因 |
+| **文件关联** | `.docx` 关联到哪个 ProgID、print 动词存不存在 |
+| **逐份结果** | 每份的开始、成功/失败、失败原因 |
+| **失败汇总** | 失败清单 + 总数统计 |
+
+#### 异常必须记录完整上下文
+
+光记 `$_.Exception.Message` 不够，那只告诉你「失败了」，不告诉你「为什么、在哪」。
+
+```powershell
+function Format-Error {
+    param($Err)
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('  异常类型 : ' + $Err.Exception.GetType().FullName)
+    [void]$sb.AppendLine('  消息     : ' + $Err.Exception.Message)
+    if ($Err.Exception.InnerException) {
+        [void]$sb.AppendLine('  内部异常 : ' + ...)   # COM 错误常藏在这里
+    }
+    if ($Err.CategoryInfo) {
+        [void]$sb.AppendLine('  错误类别 : ' + $Err.CategoryInfo.Category)
+    }
+    if ($Err.InvocationInfo.PositionMessage) {
+        [void]$sb.AppendLine('  出错位置 : ' + ...)    # 行号 + 源码片段
+    }
+    if ($Err.ScriptStackTrace) {
+        [void]$sb.AppendLine('  调用栈   :')          # 完整调用链
+    }
+    return $sb.ToString()
+}
+```
+
+实测效果（损坏 docx 的真实日志）：
+
+```
+[ERROR]       -> 失败: 文件可能已经损坏。
+[ERROR]   异常类型 : System.Runtime.InteropServices.COMException
+  消息     : 文件可能已经损坏。
+  错误类别 : OperationStopped /
+  出错位置 : At ...\打印耗材验收单.ps1:368 char:17
++ ...  $doc = $app.Documents.Open($d.FullName, $false, $true)
+  调用栈   :
+    at <ScriptBlock>, ...\打印耗材验收单.ps1: line 368
+```
+
+#### 控制台编码必须先设
+
+不设的话，`Write-Host` 输出中文在某些环境下直接抛异常：
+
+```powershell
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+} catch { }   # 老系统设不了也不能崩
+```
+
+#### 提供 -Diagnose 模式
+
+不打印，只跑环境检查并出日志。**这是用户报错时的第一句话**：「先跑一下 -Diagnose 把日志发我」。
+
+```powershell
+if ($Diagnose) {
+    Write-Log '===== 诊断完成 =====' 'STEP'
+    Write-Log '本次为诊断模式，未打印任何文件。' 'WARN'
+    Save-Log
+    exit 0
+}
+```
+
+#### 日志文件名带时间戳
+
+`打印日志_yyyyMMdd_HHmmss.txt` —— 不覆盖历史，多次运行可以对比。用户直接把这个文件发过来就能定位。
+
+#### bat 里要给出日志提示
+
+bat 是纯 ASCII（避免编码炸弹），所以提示用英文：
+
+```bat
+if not "%RC%"=="0" (
+    echo [FAILED] exit code: %RC%
+    echo A log file was written to this folder.
+    echo Please send that log file to support for diagnosis.
+)
+```
+
+`chcp 65001` 可以试着切 UTF-8，但**不要依赖它**——老系统上不生效。
+
 #### 必须自动适配 Word / WPS
 
 **每台电脑装的 Office 不一样**：有的装 Microsoft Word，有的装 WPS。脚本不能只认一种。
@@ -311,6 +432,8 @@ Start-Process -FilePath $docxPath -Verb Print
 - [ ] 每组有 4 个文件（含 `{尾号}.2.jpg` 签字照）
 - [ ] OA 根目录有 `打印耗材验收单.bat` 和 `.ps1`
 - [ ] 打印脚本 `-DryRun` 能正确列出全部 docx（且不含 `~$` 锁文件）
+- [ ] 打印脚本 `-Diagnose` 能输出环境日志
+- [ ] 跑一次确认生成了 `打印日志_*.txt`，内容含环境/引擎/文件清单
 - [ ] 项目名称逐份核对（该改的改了，该留的留着）
 - [ ] 明细金额求和 == 票面价税合计
 - [ ] Word 渲染一遍验收单，确认没错位
