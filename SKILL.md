@@ -377,10 +377,27 @@ xml = inner.read('word/document.xml').decode('utf-8')
 
 | 文件 | 作用 |
 |---|---|
-| `OA-print.bat` | **双击进菜单**（主入口，纯 ASCII 名） |
-| `OA-run.bat` | **命令行带参数**用（`-Mode Step2 -DryRun`） |
-| `OA-print.ps1` | 统一打印入口（UTF-8 BOM 保存） |
+| `OA-print.bat` | **唯一入口**。双击进菜单，带参数跑命令行 |
+| `OA-print.ps1` | 统一打印逻辑（UTF-8 BOM 保存） |
 | `pdf-print.ps1` | 零依赖 PDF 打印模块（BOM） |
+
+**只放一个 bat，别搞一堆让人选。** 同一个文件中转：
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" %*
+```
+
+- 不要参数 → `%*` 为空 → ps1 进交互菜单
+- 带参数 → `-Mode Step2 -DryRun` 直接透传 → ps1 走命令行模式
+
+**注意**：`pause` 只能在无参数（双击）时执行，否则命令行调用会卡死：
+
+```bat
+if "%~1"=="" (
+    echo Press any key to exit...
+    pause >nul
+)
+```
 
 #### 绝对不要直接运行 .ps1
 

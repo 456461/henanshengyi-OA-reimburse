@@ -147,11 +147,9 @@ T.verify("OA.zip")
 |---|---|
 | `build_v2_einvoice.py` | **一键构建（主力）**，发票走电子原件，1.6 秒出包 |
 | `build_all.py` | 旧版，发票走扫描件（仅当拿不到电子原件时用） |
-| `OA-print.bat` | **双击进菜单**（打印主入口） |
-| `OA-run.bat` | 命令行带参数用 |
+| `OA-print.bat` | **唯一打印入口**，双击进菜单 / 带参数走命令行 |
 | `OA-print.ps1` | 统一打印逻辑 |
 | `pdf-print.ps1` | 零依赖 PDF 打印模块（WinRT） |
-| `打印耗材验收单.bat/.ps1` | 旧版只管 docx，备用 |
 
 ## API
 
@@ -168,6 +166,16 @@ T.verify("OA.zip")
 
 ## 打印
 
+### 一个 bat，两种用法
+
+`OA-print.bat` 是**唯一入口**，不带参数双击进菜单，带参数直接执行：
+
+```powershell
+# 双击 = 进菜单
+# 或命令行带参数：
+.\OA-print.bat -Mode Step2 -DryRun
+```
+
 ### 按真实工作流分两步，别一次全打
 
 ```
@@ -175,7 +183,7 @@ T.verify("OA.zip")
 第二步  打包完成后再打印发票 + 出库单/清单
 ```
 
-**打开 OA 文件夹，双击 `OA-print.bat`**，进菜单：
+**双击 `OA-print.bat`**，进菜单：
 
 ```
   第一步  打印验收单 -> 手写签名 -> 拍照回传打包
@@ -191,19 +199,19 @@ T.verify("OA.zip")
 
 选 `[3]` 可以按尾号单独重打——打废了、漏签了用这个。
 
-### 命令行带参数：用 `OA-run.bat`
+### 命令行参数
 
 ```powershell
 cd <OA目录>
 
-.\OA-run.bat -Mode Step2 -DryRun              # 预览发票+出库单
-.\OA-run.bat -Mode Step1                      # 真打验收单
-.\OA-run.bat -Mode Step2                      # 真打发票+出库单
-.\OA-run.bat -Mode Group -Group 1266 -DryRun  # 预览某一组
-.\OA-run.bat -Mode Diagnose                   # 环境诊断
+.\OA-print.bat -Mode Step2 -DryRun              # 预览发票+出库单
+.\OA-print.bat -Mode Step1                      # 真打验收单
+.\OA-print.bat -Mode Step2                      # 真打发票+出库单
+.\OA-print.bat -Mode Group -Group 1266 -DryRun  # 预览某一组
+.\OA-print.bat -Mode Diagnose                   # 环境诊断
 ```
 
-### 不要直接运行 .ps1
+### 为什么只能是 .bat，不能是 .ps1
 
 本机执行策略会拦未签名脚本，直接 `.\OA-print.ps1` 会报：
 

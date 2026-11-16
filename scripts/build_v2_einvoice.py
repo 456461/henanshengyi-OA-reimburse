@@ -486,12 +486,15 @@ def copy_with_bom(src, dst):
         fh.write(raw)
     return raw.startswith(b"\xef\xbb\xbf")
 
-for f in ["OA-print.ps1", "OA-print.bat", "OA-run.bat", "pdf-print.ps1", "打印耗材验收单.ps1", "打印耗材验收单.bat"]:
+# 只放一个 bat + 它依赖的两个 ps1，别搞一堆让人选
+for f in ["OA-print.bat", "OA-print.ps1", "pdf-print.ps1"]:
     src = os.path.join(PRINT_SRC, f)
     if os.path.exists(src):
         ok = copy_with_bom(src, os.path.join(PKG, f))
         mark = " (BOM)" if ok else ""
         print("      " + f + mark)
+    else:
+        print("      !! 缺失: " + f)
 
 # ---------- 6. 打包 ----------
 print("\n[6/6] 打包...")
