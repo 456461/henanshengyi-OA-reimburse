@@ -373,12 +373,89 @@ xml = inner.read('word/document.xml').decode('utf-8')
 
 ### 9. OA 根目录必须放批量打印脚本
 
-每组文件夹里的 docx 要能**一次全打印**，不用一个个点开。根目录放两个文件：
+每组文件夹里的 docx 要能**一次全打印**，不用一个个点开。根目录放三个文件：
 
 | 文件 | 作用 |
 |---|---|
-| `打印耗材验收单.bat` | 双击启动（纯 ASCII，避免编码问题） |
-| `打印耗材验收单.ps1` | 实际逻辑（UTF-8 BOM 保存） |
+| `OA-print.bat` | 双击启动（纯 ASCII 名，避免编码问题） |
+| `OA-print.ps1` | 统一打印入口（UTF-8 BOM 保存） |
+| `pdf-print.ps1` | 零依赖 PDF 打印模块（BOM） |
+
+#### 打印必须按真实工作流分两步
+
+**这是最容易做反的地方。** 实际流程是：
+
+```
+第一步  打印验收单 -> 手写签名 -> 拍照发回 agent 打包
+第二步  打包完成后再打印发票 + 出库单/清单
+```
+
+所以菜单必须这么排：
+
+```
+[1] 第一步：打印全部验收单（docx）
+[2] 第二步：打印全部发票 + 出库单
+[3] 单独重打某一组（按尾号）
+[4] 全部一次打完（一般不用）
+[D] 诊断  [Q] 退出
+```
+
+**不要**把"全部材料"放第一个——那是一次性打 26 张纸，流程上毫无意义。
+
+#### 文件命名约定
+
+| 文件名 | 内容 |
+|---|---|
+| `<尾号>.pdf` | 发票 |
+| `<尾号>.1.pdf` | 出库单 / 清单 |
+| `<尾号>.2.jpg` | 签字照 |
+| `<尾号>（非统一采购）.docx` | 验收单 |
+
+脚本靠这个约定自动识别，**不要手工挑文件**。
+
+#### 打印顺序：先进后出
+
+打印机出纸是后打的落上面，所以：
+
+- **组内**：先送出库单，后送发票 → 拿到手最上面是发票
+- **组间**：尾号倒序（7021 → ... → 1266）→ 最上面是 1266 那组
+
+#### PDF 打印：零依赖方案（关键）
+
+**很多机器根本没装 PDF 阅读器**，`.pdf` 连文件关联都没有，`Start-Process -Verb Print` 直接失败。
+
+用 Windows 自带的 `Windows.Data.Pdf`（WinRT）渲染成位图，再走 `System.Drawing.Printing`：
+
+```powershell
+# 1. WinRT 载入 PDF
+$file = Await-WinRT ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
+$pdf  = Await-WinRT ([Windows.Data.Pdf.PdfDocument]::LoadFromFileAsync($file)) ([Windows.Data.Pdf.PdfDocument])
+
+# 2. 逐页渲染到内存流
+$opts = New-Object Windows.Data.Pdf.PdfPageRenderOptions
+$opts.DestinationWidth = [uint32]($page.Size.Width * $dpi / 96)
+$op = $page.RenderToStreamAsync($ms, $opts)
+Await-WinRTAction $op      # IAsyncAction 用非泛型 AsTask！
+
+# 3. 位图塞进 PrintDocument 打印
+```
+
+**两个必须踩过的坑**：
+
+```powershell
+# 坑 1：IAsyncAction 的 AsTask 是【非泛型】方法
+#   ❌ $m.MakeGenericMethod()  -> "is not a GenericMethodDefinition"
+#   ✅ 直接 Invoke
+$asTaskAction = [System.WindowsRuntimeSystemExtensions].GetMethods() |
+    Where-Object { $_.Name -eq 'AsTask' -and -not $_.IsGenericMethod -and
+                   $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncAction' }
+
+# 坑 2：PdfDocument 没有 Dispose 方法
+#   ❌ $pdf.Dispose()  -> "does not contain a method named 'Dispose'"
+#   ✅ 不用管，交给 GC
+```
+
+探测顺序：SumatraPDF → Acrobat → Reader → Foxit → Edge/Chrome → WinRT 渲染 → Shell。
 
 #### 路径无关是硬要求
 
@@ -669,8 +746,11 @@ Start-Process -FilePath $docxPath -Verb Print
 
 | 文件 | 作用 |
 |---|---|
-| `scripts/build_all.py` | **一键构建（主入口）**，改 CONFIG 后直接跑，3.7 秒出包 |
-| `scripts/build_v2_einvoice.py` | **电子发票版构建器**，发票字节级复制原件，出包 1.7 秒 |
+| `scripts/build_all.py` | **一键构建（旧版）**，发票走扫描件，仅当拿不到电子原件时用 |
+| `scripts/build_v2_einvoice.py` | **电子发票版构建器（主力）**，发票字节级复制原件，1.7 秒出包 |
+| `scripts/OA-print.ps1` | **统一打印入口**，按工作流分两步，支持按尾号单打 |
+| `scripts/OA-print.bat` | 打印启动器（双击运行，菜单式） |
+| `scripts/pdf-print.ps1` | **零依赖 PDF 打印模块**（WinRT 渲染 + System.Drawing） |
 | `scripts/oa_pipeline.py` | 流水线核心：PDF/签字照/docx/打包，全部函数内联 |
 | `scripts/oa_tools.py` | 通用工具函数（供单独调用） |
 | `scripts/打印耗材验收单.ps1` | 批量打印（Word/WPS 自适应 + 日志 + 倒序） |

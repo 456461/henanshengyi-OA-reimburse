@@ -30,7 +30,11 @@ T0 = time.time()
 # CONFIG
 # ==================================================================
 
-INVOICE_SRC = r"C:\Users\lenovo\Desktop"          # dzfp_*.pdf 电子发票原件
+INVOICE_DIRS = [
+    r"D:\DeepSeekWorkspace\oa_v2\invoices",   # 专用归档（首选，别动）
+    r"C:\Users\lenovo\Desktop",               # 桌面（用户常丢这）
+    r"C:\Users\lenovo\Downloads",             # 下载目录
+]
 SCAN_PDF    = r"D:\微信聊天记录\xwechat_files\wxid_96ekyiryud0n22_117f\msg\file\2026-11\报销相关文件.pdf"
 SIGN_DIR    = r"D:\DeepSeekWorkspace\newbatch_src"
 TEMPLATE    = r"C:\Users\lenovo\.dsh\skills\henanshengyi-OA-reimburse\templates\验收单母版.docx"
@@ -370,13 +374,20 @@ print("=" * 62)
 # ---------- 1. 发票：电子原件，原样复制 ----------
 print("\n[1/6] 放置电子发票原件...")
 t = time.time()
-inv_files = glob.glob(os.path.join(INVOICE_SRC, "dzfp_*.pdf"))
+inv_files = []
+for d in INVOICE_DIRS:
+    if os.path.isdir(d):
+        inv_files += glob.glob(os.path.join(d, "dzfp_*.pdf"))
 inv_by_tail = {}
 for f in inv_files:
     m = re.search(r"dzfp_(\d{20})_", os.path.basename(f))
     if not m:
         continue
-    inv_by_tail[m.group(1)[-4:]] = f
+    tail = m.group(1)[-4:]
+    # 同一尾号有多份时，优先取 oa_v2\invoices 下的
+    if tail in inv_by_tail and "oa_v2" not in f:
+        continue
+    inv_by_tail[tail] = f
 
 placed_inv = set()
 for code in CODES:
@@ -463,11 +474,24 @@ print("      %d 份, %.2f s" % (len(CODES), time.time() - t))
 
 # ---------- 5. 打印脚本 ----------
 print("\n[5/6] 放入打印脚本...")
-for f in ["打印耗材验收单.ps1", "打印耗材验收单.bat"]:
+
+def copy_with_bom(src, dst):
+    """PowerShell 5.1 会把无 BOM 的 UTF-8 当 GBK 读，中文全乱。
+       .ps1 必须带 BOM，这里自动补上。"""
+    with open(src, "rb") as fh:
+        raw = fh.read()
+    if src.lower().endswith(".ps1") and not raw.startswith(b"\xef\xbb\xbf"):
+        raw = b"\xef\xbb\xbf" + raw
+    with open(dst, "wb") as fh:
+        fh.write(raw)
+    return raw.startswith(b"\xef\xbb\xbf")
+
+for f in ["OA-print.ps1", "OA-print.bat", "pdf-print.ps1", "打印耗材验收单.ps1", "打印耗材验收单.bat"]:
     src = os.path.join(PRINT_SRC, f)
     if os.path.exists(src):
-        shutil.copyfile(src, os.path.join(PKG, f))
-        print("      " + f)
+        ok = copy_with_bom(src, os.path.join(PKG, f))
+        mark = " (BOM)" if ok else ""
+        print("      " + f + mark)
 
 # ---------- 6. 打包 ----------
 print("\n[6/6] 打包...")
