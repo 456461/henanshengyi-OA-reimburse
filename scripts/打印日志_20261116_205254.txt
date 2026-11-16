@@ -1,0 +1,9 @@
+﻿[2026-11-16 20:52:54][STEP ] ===== 环境信息 =====
+[2026-11-16 20:52:54][INFO ] 根目录     : C:\Users\lenovo\.dsh\skills\henanshengyi-OA-reimburse\scripts
+[2026-11-16 20:52:54][INFO ] 操作系统   : Microsoft Windows NT 10.0.26200.0
+[2026-11-16 20:52:54][INFO ] PowerShell : 5.1.26100.9711
+[2026-11-16 20:52:54][INFO ] 默认打印机 : Adobe PDF
+[2026-11-16 20:52:54][INFO ] 
+[2026-11-16 20:52:54][STEP ] ===== 扫描材料 =====
+[2026-11-16 20:52:54][ERROR] 在 C:\Users\lenovo\.dsh\skills\henanshengyi-OA-reimburse\scripts 下没有找到任何材料文件夹
+[2026-11-16 20:52:54][WARN ] 请确认本脚本与各尾号文件夹（1266 / 2931 / ...）在同一层。

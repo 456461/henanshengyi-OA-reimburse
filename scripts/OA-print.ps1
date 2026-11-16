@@ -537,8 +537,11 @@ if ($Groups.Count -eq 0) {
     Save-Log
     Write-Host ''
     Write-Host ('日志已保存: ' + $script:LogPath) -ForegroundColor Yellow
-    Write-Host '按任意键退出...' -ForegroundColor DarkGray
-    try { [void]$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown') } catch { }
+    # 只有交互模式才等按键，否则命令行调用会永久挂住
+    if ($Mode -eq 'Menu') {
+        Write-Host '按任意键退出...' -ForegroundColor DarkGray
+        try { [void]$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown') } catch { }
+    }
     exit 1
 }
 
@@ -677,11 +680,12 @@ function Show-Menu {
     Write-Host ''
     Write-Host ('-' * 64) -ForegroundColor DarkCyan
     Write-Host ''
-    Write-Host '   [1] 第一步：打印全部验收单（docx）' -ForegroundColor Green
-    Write-Host '   [2] 第二步：打印全部发票 + 出库单' -ForegroundColor Green
+    Write-Host '   [1] 打印全部验收单（docx）' -ForegroundColor Green
+    Write-Host '   [2] 打印某一组：发票 + 出库单   <- 输入尾号' -ForegroundColor Green
     Write-Host ''
-    Write-Host '   [3] 单独重打某一组（按尾号）' -ForegroundColor Gray
-    Write-Host '   [4] 全部一次打完（验收单+发票+出库单）' -ForegroundColor DarkGray
+    Write-Host '   [3] 打印全部发票 + 出库单' -ForegroundColor Gray
+    Write-Host '   [4] 打印某一组：验收单 + 发票 + 出库单' -ForegroundColor Gray
+    Write-Host '   [5] 打印全部（三样一起）' -ForegroundColor DarkGray
     Write-Host ''
     Write-Host '   [D] 诊断模式（不打印）' -ForegroundColor DarkGray
     Write-Host '   [Q] 退出' -ForegroundColor DarkGray
@@ -718,22 +722,6 @@ function Select-GroupInteractive {
     return $null
 }
 
-function Select-ItemsInteractive {
-    Write-Host ''
-    Write-Host '  这一组打印哪些？' -ForegroundColor White
-    Write-Host '   [1] 发票 + 出库单（第二步用）' -ForegroundColor Gray
-    Write-Host '   [2] 验收单（第一步用）' -ForegroundColor Gray
-    Write-Host '   [3] 三样都打' -ForegroundColor Gray
-    Write-Host ''
-    $s = ''
-    try { $s = Read-Host '选择 [1/2/3]（回车=1）' } catch { return 'pdf' }
-    switch ($s.Trim()) {
-        '2' { return 'docs' }
-        '3' { return 'all' }
-        default { return 'pdf' }
-    }
-}
-
 :menuLoop while ($true) {
     Show-Menu
     $choice = ''
@@ -744,16 +732,27 @@ function Select-ItemsInteractive {
     if ($choice -eq 'Q') { break menuLoop }
 
     switch ($choice) {
-        '1' { Show-PlanAndMaybePrint (Build-Plan -Codes $allCodes -What 'docs') '[第一步] 全部验收单' }
-        '2' { Show-PlanAndMaybePrint (Build-Plan -Codes $allCodes -What 'pdf')  '[第二步] 全部发票 + 出库单' }
-        '3' {
+        '1' { Show-PlanAndMaybePrint (Build-Plan -Codes $allCodes -What 'docs') '全部验收单' }
+
+        '2' {
+            # 高频操作：选一组，直接打发票 + 出库单，不再多问一层
             $code = Select-GroupInteractive
             if ($code) {
-                $what = Select-ItemsInteractive
-                Show-PlanAndMaybePrint (Build-Plan -Codes @($code) -What $what) ('尾号 ' + $code)
+                Show-PlanAndMaybePrint (Build-Plan -Codes @($code) -What 'pdf') ('尾号 ' + $code + '：发票 + 出库单')
             }
         }
-        '4' { Show-PlanAndMaybePrint (Build-Plan -Codes $allCodes -What 'all')  '全部材料（一次性）' }
+
+        '3' { Show-PlanAndMaybePrint (Build-Plan -Codes $allCodes -What 'pdf')  '全部发票 + 出库单' }
+
+        '4' {
+            $code = Select-GroupInteractive
+            if ($code) {
+                Show-PlanAndMaybePrint (Build-Plan -Codes @($code) -What 'all') ('尾号 ' + $code + '：三样全打')
+            }
+        }
+
+        '5' { Show-PlanAndMaybePrint (Build-Plan -Codes $allCodes -What 'all')  '全部材料（三样一起）' }
+
         'D' { Show-Diagnose }
         ''  { }
         default { Write-Host '  无效选项' -ForegroundColor Red }
