@@ -486,7 +486,7 @@ def copy_with_bom(src, dst):
         fh.write(raw)
     return raw.startswith(b"\xef\xbb\xbf")
 
-for f in ["OA-print.ps1", "OA-print.bat", "pdf-print.ps1", "打印耗材验收单.ps1", "打印耗材验收单.bat"]:
+for f in ["OA-print.ps1", "OA-print.bat", "OA-run.bat", "pdf-print.ps1", "打印耗材验收单.ps1", "打印耗材验收单.bat"]:
     src = os.path.join(PRINT_SRC, f)
     if os.path.exists(src):
         ok = copy_with_bom(src, os.path.join(PKG, f))

@@ -377,9 +377,42 @@ xml = inner.read('word/document.xml').decode('utf-8')
 
 | 文件 | 作用 |
 |---|---|
-| `OA-print.bat` | 双击启动（纯 ASCII 名，避免编码问题） |
+| `OA-print.bat` | **双击进菜单**（主入口，纯 ASCII 名） |
+| `OA-run.bat` | **命令行带参数**用（`-Mode Step2 -DryRun`） |
 | `OA-print.ps1` | 统一打印入口（UTF-8 BOM 保存） |
 | `pdf-print.ps1` | 零依赖 PDF 打印模块（BOM） |
+
+#### 绝对不要直接运行 .ps1
+
+**本机执行策略会拦未签名脚本**，双击 ps1 或在 PowerShell 里 `.\xxx.ps1` 会报：
+
+```
+无法加载文件 ... 未对文件进行数字签名。
+```
+
+**必须走 bat**，因为 bat 里带了 `-ExecutionPolicy Bypass`：
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" %*
+```
+
+给用户的指引只有一句：**双击 `OA-print.bat`，别去 PowerShell 里敲 ps1**。
+
+#### bat 文件内容必须纯 ASCII
+
+**中文注释会把 bat 拆坏。** 实测在 bat 里写中文 `REM` 注释后，
+cmd 会把 UTF-8 字节按 GBK 切开，导致 `'un.bat' is not recognized` 这类诡异错误。
+
+```bat
+REM ✅ 对：注释全英文
+REM  Print docx invoices in reverse order
+
+REM ❌ 错：中文注释，cmd 解析会崩
+REM  打印验收单
+```
+
+`chcp 65001` 解决不了这个问题，**只能不用中文**。
+文件名可以是中文（`打印耗材验收单.bat`），但**内容必须纯 ASCII**。
 
 #### 打印必须按真实工作流分两步
 
